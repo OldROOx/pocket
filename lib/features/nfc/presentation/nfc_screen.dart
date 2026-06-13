@@ -54,46 +54,59 @@ class _NfcScreenState extends ConsumerState<NfcScreen> {
       await NfcManager.instance.startSession(
         onDiscovered: (NfcTag tag) async {
           final info = <String, String>{};
-
-          // UID y tecnologías a partir de los datos crudos del tag.
-          final data = tag.data;
+          final rawData = tag.data;
           List<int>? identifier;
           final techs = <String>[];
-          for (final key in data.keys) {
+
+          rawData.forEach((key, value) {
             techs.add(key.toString());
-            final value = data[key];
-            if (value is Map && value['identifier'] is List) {
-              identifier = List<int>.from(value['identifier'] as List);
+            if (value is Map) {
+              final id = value['identifier'];
+              if (id is List) {
+                identifier = List<int>.from(id);
+              } else if (id is Uint8List) {
+                identifier = id.toList();
+              }
             }
-            if (value is Map && value['identifier'] is Uint8List) {
-              identifier = (value['identifier'] as Uint8List).toList();
-            }
-          }
-          info['UID'] =
-              identifier != null ? _bytesToHex(identifier) : 'Desconocido';
+          });
+
+          info['UID'] = identifier != null ? _bytesToHex(identifier!) : 'Desconocido';
           info['Tecnología'] = techs.join(', ');
 
-          // Contenido NDEF si existe.
-          final ndef = Ndef.from(tag);
-          if (ndef != null) {
-            info['Tipo'] = 'NDEF';
-            info['Capacidad'] = '${ndef.maxSize} bytes';
-            final message = ndef.cachedMessage;
-            if (message != null) {
-              final contents = <String>[];
-              for (final record in message.records) {
-                try {
-                  contents.add(utf8.decode(record.payload,
-                      allowMalformed: true));
-                } catch (_) {
-                  contents.add(_bytesToHex(record.payload));
+          try {
+            final ndefEntry = rawData['ndef'];
+            if (ndefEntry != null && ndefEntry is Map) {
+              info['Tipo'] = 'NDEF';
+              final cachedMessage = ndefEntry['cachedMessage'];
+              if (cachedMessage != null && cachedMessage is Map) {
+                final records = cachedMessage['records'];
+                if (records is List) {
+                  final contents = <String>[];
+                  for (final record in records) {
+                    if (record is Map) {
+                      final payload = record['payload'];
+                      List<int>? bytes;
+                      if (payload is List) bytes = List<int>.from(payload);
+                      if (payload is Uint8List) bytes = payload.toList();
+                      if (bytes != null) {
+                        try {
+                          contents.add(utf8.decode(bytes, allowMalformed: true));
+                        } catch (_) {
+                          contents.add(_bytesToHex(bytes));
+                        }
+                      }
+                    }
+                  }
+                  if (contents.isNotEmpty) info['Contenido'] = contents.join('\n');
                 }
               }
-              info['Contenido'] = contents.join('\n');
+            } else {
+              info['Tipo'] = 'No NDEF';
             }
-          } else {
-            info['Tipo'] = 'No NDEF';
+          } catch (_) {
+            info['Tipo'] = 'Lectura básica';
           }
+
           info['Fecha'] = DateTime.now().toString().substring(0, 19);
 
           await NfcManager.instance.stopSession();
@@ -104,14 +117,11 @@ class _NfcScreenState extends ConsumerState<NfcScreen> {
           });
 
           ref.read(historyProvider.notifier).add(HistoryEntry(
-                type: 'nfc',
-                title: 'Etiqueta NFC ${info['UID']}',
-                subtitle: info['Tipo'] ?? '',
-                data: info,
-              ));
-        },
-        onError: (error) async {
-          if (mounted) setState(() => _scanning = false);
+            type: 'nfc',
+            title: 'Etiqueta NFC ${info['UID']}',
+            subtitle: info['Tipo'] ?? '',
+            data: info,
+          ));
         },
       );
     } catch (e) {
@@ -154,23 +164,23 @@ class _NfcScreenState extends ConsumerState<NfcScreen> {
                   color: AppColors.blue,
                 )
                     .animate(
-                        onPlay: (c) => _scanning ? c.repeat() : c.stop())
+                    onPlay: (c) => _scanning ? c.repeat() : c.stop())
                     .scale(
-                        begin: const Offset(1, 1),
-                        end: const Offset(1.15, 1.15),
-                        duration: 600.ms)
+                    begin: const Offset(1, 1),
+                    end: const Offset(1.15, 1.15),
+                    duration: 600.ms)
                     .then()
                     .scale(
-                        begin: const Offset(1.15, 1.15),
-                        end: const Offset(1, 1),
-                        duration: 600.ms),
+                    begin: const Offset(1.15, 1.15),
+                    end: const Offset(1, 1),
+                    duration: 600.ms),
                 const SizedBox(height: 12),
                 Text(
                   !_available
                       ? 'NFC no disponible en este dispositivo'
                       : _scanning
-                          ? 'Acerca una etiqueta NFC...'
-                          : 'Listo para leer etiquetas',
+                      ? 'Acerca una etiqueta NFC...'
+                      : 'Listo para leer etiquetas',
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                       fontWeight: FontWeight.w800, fontSize: 16),
@@ -184,7 +194,7 @@ class _NfcScreenState extends ConsumerState<NfcScreen> {
             icon: _scanning ? Icons.stop_rounded : Icons.play_arrow_rounded,
             color: _scanning ? AppColors.red : AppColors.blue,
             onPressed:
-                !_available ? null : (_scanning ? _stopScan : _startScan),
+            !_available ? null : (_scanning ? _stopScan : _startScan),
           ),
           if (_lastRead != null) ...[
             const SectionHeader('Última lectura'),
@@ -238,8 +248,7 @@ class _NfcScreenState extends ConsumerState<NfcScreen> {
           const PocketCard(
             child: Text(
               'En iOS la lectura usa CoreNFC y requiere iPhone 7 o '
-              'posterior. En Android funciona en segundo plano mientras '
-              'la pantalla esté activa.',
+                  'posterior. En Android funciona mientras la pantalla esté activa.',
               style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
             ),
           ),
